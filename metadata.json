@@ -1,0 +1,6 @@
+{
+  "name": "GuestLink",
+  "description": "Automated client session approval, quota management, and package traffic shaping for OpenWrt openNDS Starlink guest portals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
