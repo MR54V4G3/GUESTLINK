@@ -118,7 +118,7 @@ fun RouterSettingsScreen(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Configure how NDS Sentinel interfaces with your openNDS captive portal",
+                text = "Configure how GuestLink interfaces with your Starlink / openNDS portal",
                 color = TextSecondary,
                 fontSize = 12.sp
             )
@@ -365,6 +365,76 @@ fun RouterSettingsScreen(
             }
         }
 
+        // Connection Guide & Setup Instructions
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceCard, RoundedCornerShape(16.dp))
+                    .border(1.dp, OutlineDark, RoundedCornerShape(16.dp))
+                    .padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(CyanNeon.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Lan,
+                                contentDescription = null,
+                                tint = CyanNeon,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "How to Connect GuestLink to Router",
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Setup guide for OpenWrt & Starlink Portal v3.7",
+                                color = CyanNeon,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    ConnectionStepItem(
+                        step = "1",
+                        title = "Connect to Router Wi-Fi / Admin LAN",
+                        desc = "Connect your Android phone to the router's Admin Wi-Fi or LAN. By default, allow-client.sh permits clients on subnet 192.168.2.* or 100.* (or any trusted IP you configure on OpenWrt)."
+                    )
+
+                    ConnectionStepItem(
+                        step = "2",
+                        title = "Verify Router IP Address",
+                        desc = "Ensure the Router IP / Host field above matches your gateway (default: 192.168.2.1, or 192.168.1.1) and port 80 (or 443)."
+                    )
+
+                    ConnectionStepItem(
+                        step = "3",
+                        title = "Select Starlink Portal v3.7 Protocol",
+                        desc = "Select 'Starlink Guest Portal & Policy Dashboard v3.7' above. The CGI path is set to /cgi-bin/requests to interface with live-manager.sh."
+                    )
+
+                    ConnectionStepItem(
+                        step = "4",
+                        title = "Tap 'Test Probe' & Save",
+                        desc = "Tap 'Test Probe' to check HTTP reachability. If you are not connected to the router right now, switch to 'Virtual openNDS Simulator' to test and demo the entire app offline."
+                    )
+                }
+            }
+        }
+
         // OpenNDS Architecture & Info Box
         item {
             Box(
@@ -513,3 +583,52 @@ private fun ProtocolOptionRow(
         }
     }
 }
+
+@Composable
+private fun ConnectionStepItem(
+    step: String,
+    title: String,
+    desc: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(SurfaceDark)
+            .border(0.5.dp, OutlineDark, RoundedCornerShape(10.dp))
+            .padding(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(CyanNeon.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = step,
+                color = CyanNeon,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = desc,
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp
+            )
+        }
+    }
+}
+

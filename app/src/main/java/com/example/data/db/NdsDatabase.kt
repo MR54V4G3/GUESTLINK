@@ -61,7 +61,7 @@ abstract class NdsDatabase : RoomDatabase() {
                                         autoDeauthOnExpire = true,
                                         autoDeauthOnQuota = true,
                                         autoApproveNewClients = true,
-                                        gatewayName = "openNDS Sentinel Gateway"
+                                        gatewayName = "GuestLink Starlink Gateway"
                                     )
                                 )
 
@@ -110,11 +110,11 @@ abstract class NdsDatabase : RoomDatabase() {
                                         timestamp = System.currentTimeMillis() - 300_000,
                                         mac = "SYSTEM",
                                         ip = "127.0.0.1",
-                                        hostname = "NDS Sentinel Core",
+                                        hostname = "GuestLink Core",
                                         action = "AUTO_APPROVED",
                                         durationMinutes = 0,
                                         ruleName = "Engine Initialized",
-                                        details = "openNDS Sentinel automation engine loaded and monitoring"
+                                        details = "GuestLink engine initialized and monitoring"
                                     )
                                 )
                             }

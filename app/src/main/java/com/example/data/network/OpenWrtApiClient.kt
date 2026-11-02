@@ -279,20 +279,16 @@ class OpenWrtApiClient(
             }
         }
 
-        // 2. Parse Connected Devices
-        // Matches: <strong class="device-title">([^<]+)</strong> ... MAC address.*?<code>([0-9a-fA-F:]{17})</code> ... IP address.*?<strong>([0-9.]+)</strong>
-        val deviceRegex = Pattern.compile(
-            "<strong class=\"device-title\">\\s*([^<]+)\\s*</strong>[\\s\\S]*?<small>MAC address</small><code>\\s*([0-9a-fA-F:]{17})\\s*</code>[\\s\\S]*?<small>IP address</small><strong>\\s*([0-9.]+)\\s*</strong>[\\s\\S]*?<small>DHCP device name</small><strong>\\s*([^<]+)\\s*</strong>",
+        // 2. Parse Connected Devices from /cgi-bin/requests (Panel "Currently Connected Guests")
+        // HTML: <section class="request"><strong>MAC address:</strong> (MAC)<br><strong>Client IP:</strong> (IP)...
+        val connectedRegex = Pattern.compile(
+            "<strong>MAC address:\\s*</strong>\\s*([0-9a-fA-F:]{17})[\\s\\S]*?Client IP:\\s*</strong>\\s*([0-9.]+)",
             Pattern.CASE_INSENSITIVE
         )
-        val deviceMatcher = deviceRegex.matcher(html)
-
-        while (deviceMatcher.find()) {
-            val title = deviceMatcher.group(1)?.trim()
-            val mac = deviceMatcher.group(2)?.trim()?.uppercase() ?: continue
-            val ip = deviceMatcher.group(3)?.trim() ?: "192.168.1.0"
-            val dhcpHost = deviceMatcher.group(4)?.trim()
-
+        val connectedMatcher = connectedRegex.matcher(html)
+        while (connectedMatcher.find()) {
+            val mac = connectedMatcher.group(1)?.trim()?.uppercase() ?: continue
+            val ip = connectedMatcher.group(2)?.trim() ?: "192.168.1.0"
             if (!seenMacs.contains(mac)) {
                 seenMacs.add(mac)
                 result.add(
@@ -300,13 +296,45 @@ class OpenWrtApiClient(
                         mac = mac,
                         ip = ip,
                         state = ClientState.AUTHENTICATED,
-                        hostname = dhcpHost ?: title,
-                        guestName = title,
+                        hostname = "Guest-${mac.takeLast(5).replace(":", "")}",
+                        guestName = "Connected Guest",
                         vendor = MacVendorHelper.resolveVendor(mac),
                         firstSeenEpochSec = now - 1800,
                         lastSeenEpochSec = now,
                         sessionStartEpochSec = now - 1800,
                         sessionEndEpochSec = now + 1800,
+                        durationMinutes = 60
+                    )
+                )
+            }
+        }
+
+        // 3. Parse Approved & Revoked Guests
+        // HTML: <section class="request"><strong>Name:</strong> (Name)<br><strong>MAC address:</strong> (MAC)<br><strong>Status:</strong> (Approved|Access revoked)
+        val approvedRegex = Pattern.compile(
+            "<strong>Name:\\s*</strong>\\s*([^<\\r\\n]+)[\\s\\S]*?MAC address:\\s*</strong>\\s*([0-9a-fA-F:]{17})[\\s\\S]*?Status:\\s*</strong>\\s*([^<\\r\\n]+)",
+            Pattern.CASE_INSENSITIVE
+        )
+        val approvedMatcher = approvedRegex.matcher(html)
+        while (approvedMatcher.find()) {
+            val name = approvedMatcher.group(1)?.trim()
+            val mac = approvedMatcher.group(2)?.trim()?.uppercase() ?: continue
+            val status = approvedMatcher.group(3)?.trim()?.lowercase() ?: ""
+            if (!seenMacs.contains(mac) && !mac.equals("UNKNOWN", ignoreCase = true)) {
+                seenMacs.add(mac)
+                val isRevoked = status.contains("revoked")
+                result.add(
+                    ClientSession(
+                        mac = mac,
+                        ip = "192.168.2.0",
+                        state = if (isRevoked) ClientState.BLOCKED else ClientState.AUTHENTICATED,
+                        hostname = name,
+                        guestName = name,
+                        vendor = MacVendorHelper.resolveVendor(mac),
+                        firstSeenEpochSec = now - 3600,
+                        lastSeenEpochSec = now,
+                        sessionStartEpochSec = now - 3600,
+                        sessionEndEpochSec = now + 3600,
                         durationMinutes = 60
                     )
                 )
@@ -866,60 +894,181 @@ class OpenWrtApiClient(
 
     private fun parseQuotasHtml(html: String): List<QuotaAccount> {
         val list = mutableListOf<QuotaAccount>()
-        val macPattern = Pattern.compile("<code>\\s*([0-9a-fA-F:]{17})\\s*</code>", Pattern.CASE_INSENSITIVE)
-        val matcher = macPattern.matcher(html)
         val seen = mutableSetOf<String>()
+
+        // Match <section class="account"><h2>(MAC)</h2><pre>(STATUS_OUTPUT)</pre>
+        val accountRegex = Pattern.compile(
+            "<section class=\"account\">\\s*<h2>\\s*([0-9a-fA-F:]{17})\\s*</h2>\\s*<pre>([\\s\\S]*?)</pre>",
+            Pattern.CASE_INSENSITIVE
+        )
+        val matcher = accountRegex.matcher(html)
 
         while (matcher.find()) {
             val mac = matcher.group(1)?.trim()?.uppercase() ?: continue
+            val preContent = matcher.group(2).orEmpty()
             if (!seen.contains(mac)) {
                 seen.add(mac)
+
+                // Extract Phone
+                val phoneMatch = Pattern.compile("Phone:\\s*([^\\r\\n]+)", Pattern.CASE_INSENSITIVE).matcher(preContent)
+                val phone = if (phoneMatch.find()) phoneMatch.group(1)?.trim().orEmpty() else ""
+
+                // Extract Status
+                val statusMatch = Pattern.compile("Status:\\s*([^\\r\\n]+)", Pattern.CASE_INSENSITIVE).matcher(preContent)
+                val status = if (statusMatch.find()) statusMatch.group(1)?.trim()?.lowercase().orEmpty() else "active"
+
+                // Extract Blocked
+                val blockedMatch = Pattern.compile("Blocked:\\s*([0-9]+)", Pattern.CASE_INSENSITIVE).matcher(preContent)
+                val isBlocked = if (blockedMatch.find()) blockedMatch.group(1)?.trim() == "1" else false
+
+                // Extract Download limit & used
+                // e.g.: Download:  limit 1024.000 MiB; used 25.500 MiB; remaining 998.500 MiB
+                val downLimitMatch = Pattern.compile("Download:\\s*limit\\s*([0-9.]+)\\s*MiB;\\s*used\\s*([0-9.]+)\\s*MiB", Pattern.CASE_INSENSITIVE).matcher(preContent)
+                var downLimitMib = 1024
+                var downUsedBytes = 0L
+                if (downLimitMatch.find()) {
+                    downLimitMib = downLimitMatch.group(1)?.toDoubleOrNull()?.toInt() ?: 1024
+                    val usedMib = downLimitMatch.group(2)?.toDoubleOrNull() ?: 0.0
+                    downUsedBytes = (usedMib * 1024.0 * 1024.0).toLong()
+                }
+
+                // Extract Upload limit & used
+                val upLimitMatch = Pattern.compile("Upload:\\s*limit\\s*([0-9.]+)\\s*MiB;\\s*used\\s*([0-9.]+)\\s*MiB", Pattern.CASE_INSENSITIVE).matcher(preContent)
+                var upLimitMib = 256
+                var upUsedBytes = 0L
+                if (upLimitMatch.find()) {
+                    upLimitMib = upLimitMatch.group(1)?.toDoubleOrNull()?.toInt() ?: 256
+                    val usedMib = upLimitMatch.group(2)?.toDoubleOrNull() ?: 0.0
+                    upUsedBytes = (usedMib * 1024.0 * 1024.0).toLong()
+                }
+
                 list.add(
                     QuotaAccount(
                         mac = mac,
-                        downloadLimitMib = 1024,
-                        uploadLimitMib = 256,
-                        downloadUsedBytes = 250L * 1024L * 1024L,
-                        uploadUsedBytes = 35L * 1024L * 1024L,
-                        status = "active"
+                        downloadLimitMib = downLimitMib,
+                        uploadLimitMib = upLimitMib,
+                        downloadUsedBytes = downUsedBytes,
+                        uploadUsedBytes = upUsedBytes,
+                        status = if (isBlocked) "blocked" else status
                     )
                 )
             }
         }
+
+        // Fallback: search for any MACs in <code> or <h2> tags if custom template
+        if (list.isEmpty()) {
+            val fallbackPattern = Pattern.compile("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}")
+            val fbMatcher = fallbackPattern.matcher(html)
+            while (fbMatcher.find()) {
+                val mac = fbMatcher.group(0).uppercase()
+                if (!seen.contains(mac)) {
+                    seen.add(mac)
+                    list.add(
+                        QuotaAccount(
+                            mac = mac,
+                            downloadLimitMib = 1024,
+                            uploadLimitMib = 256,
+                            downloadUsedBytes = 0L,
+                            uploadUsedBytes = 0L,
+                            status = "active"
+                        )
+                    )
+                }
+            }
+        }
+
         return list
     }
 
     private fun parsePackagesHtml(html: String): List<GuestPackage> {
         val list = mutableListOf<GuestPackage>()
-        // Match table rows: <code>([0-9a-fA-F:]{17})</code>
-        val macPattern = Pattern.compile("<code>\\s*([0-9a-fA-F:]{17})\\s*</code>", Pattern.CASE_INSENSITIVE)
-        val matcher = macPattern.matcher(html)
         val seen = mutableSetOf<String>()
         val now = System.currentTimeMillis() / 1000L
 
+        // Match <article class="package"> ... <div class="mac">(MAC)</div> ... <span class="pill (pillClass)">(status)</span>
+        val pkgRegex = Pattern.compile(
+            "<article class=\"package\">[\\s\\S]*?<div class=\"mac\">\\s*([0-9a-fA-F:]{17})\\s*</div>[\\s\\S]*?<div class=\"phone\">\\s*([^<]*)\\s*</div>[\\s\\S]*?<span class=\"pill\\s*([a-z]+)\">\\s*([^<]*)\\s*</span>([\\s\\S]*?)</article>",
+            Pattern.CASE_INSENSITIVE
+        )
+        val matcher = pkgRegex.matcher(html)
+
         while (matcher.find()) {
             val mac = matcher.group(1)?.trim()?.uppercase() ?: continue
+            val phone = matcher.group(2)?.trim().orEmpty()
+            val status = matcher.group(3)?.trim()?.lowercase() ?: "active"
+            val body = matcher.group(5).orEmpty()
+
             if (!seen.contains(mac)) {
                 seen.add(mac)
+
+                fun findFact(factName: String, defaultVal: String = ""): String {
+                    val m = Pattern.compile("<span>$factName</span>\\s*<strong>([^<]+)</strong>", Pattern.CASE_INSENSITIVE).matcher(body)
+                    return if (m.find()) m.group(1)?.trim().orEmpty() else defaultVal
+                }
+
+                val downLimitStr = findFact("Download limit", "1024 MiB")
+                val upLimitStr = findFact("Upload limit", "256 MiB")
+                val validityDaysStr = findFact("Validity", "7 days").replace(Regex("[^0-9]"), "")
+                val normDownSpeedStr = findFact("Normal download speed", "512 kbps").replace(Regex("[^0-9]"), "")
+                val normUpSpeedStr = findFact("Normal upload speed", "64 kbps").replace(Regex("[^0-9]"), "")
+                val afterDownSpeedStr = findFact("After-quota download", "64 kbps").replace(Regex("[^0-9]"), "")
+                val afterUpSpeedStr = findFact("After-quota upload", "32 kbps").replace(Regex("[^0-9]"), "")
+                val afterAction = findFact("After-quota action", "throttle").lowercase()
+                val freeDataStr = findFact("Overnight free data", "Disabled").lowercase()
+
+                val downLimitClean = downLimitStr.replace(Regex("[^0-9]"), "").ifBlank { "1024" }
+                val upLimitClean = upLimitStr.replace(Regex("[^0-9]"), "").ifBlank { "256" }
+
                 list.add(
                     GuestPackage(
                         mac = mac,
-                        downloadLimitMib = "1024",
-                        uploadLimitMib = "256",
-                        validityDays = 7,
-                        uploadKbps = 64,
-                        downloadKbps = 512,
-                        afterQuotaUploadKbps = 32,
-                        afterQuotaDownloadKbps = 64,
-                        afterQuotaAction = "throttle",
-                        freeDataEnabled = true,
-                        status = "active",
+                        phone = phone,
+                        downloadLimitMib = downLimitClean,
+                        uploadLimitMib = upLimitClean,
+                        validityDays = validityDaysStr.toIntOrNull() ?: 7,
+                        uploadKbps = normUpSpeedStr.toIntOrNull() ?: 64,
+                        downloadKbps = normDownSpeedStr.toIntOrNull() ?: 512,
+                        afterQuotaUploadKbps = afterUpSpeedStr.toIntOrNull() ?: 32,
+                        afterQuotaDownloadKbps = afterDownSpeedStr.toIntOrNull() ?: 64,
+                        afterQuotaAction = if (afterAction.contains("disconnect")) "disconnect" else "throttle",
+                        freeDataEnabled = freeDataStr.contains("enabled"),
+                        status = status,
                         assignedEpochSec = now - 3600,
-                        expiresEpochSec = now + (6 * 86400)
+                        expiresEpochSec = now + ((validityDaysStr.toLongOrNull() ?: 7L) * 86400L)
                     )
                 )
             }
         }
+
+        // Fallback: match any MAC address in the HTML if custom format
+        if (list.isEmpty()) {
+            val macPattern = Pattern.compile("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}")
+            val fbMatcher = macPattern.matcher(html)
+            while (fbMatcher.find()) {
+                val mac = fbMatcher.group(0).uppercase()
+                if (!seen.contains(mac)) {
+                    seen.add(mac)
+                    list.add(
+                        GuestPackage(
+                            mac = mac,
+                            downloadLimitMib = "1024",
+                            uploadLimitMib = "256",
+                            validityDays = 7,
+                            uploadKbps = 64,
+                            downloadKbps = 512,
+                            afterQuotaUploadKbps = 32,
+                            afterQuotaDownloadKbps = 64,
+                            afterQuotaAction = "throttle",
+                            freeDataEnabled = true,
+                            status = "active",
+                            assignedEpochSec = now - 3600,
+                            expiresEpochSec = now + (7 * 86400)
+                        )
+                    )
+                }
+            }
+        }
+
         return list
     }
 
